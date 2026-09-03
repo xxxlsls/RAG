@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>掌柜智库 · 知识库导入</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Microsoft YaHei", sans-serif;
+            background: linear-gradient(135deg, #1e293b, #0f172a);
+            min-height: 100vh; color: #e2e8f0; padding: 40px 20px;
+        }
+        .container { max-width: 760px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 24px; font-size: 26px; }
+
+        /* 上传区 */
+        #uploadArea {
+            border: 2px dashed #475569; border-radius: 12px;
+            padding: 48px 20px; text-align: center; cursor: pointer;
+            transition: all .25s; background: rgba(30, 41, 59, .6);
+        }
+        #uploadArea:hover, #uploadArea.dragover { border-color: #38bdf8; background: rgba(56, 189, 248, .08); }
+        #uploadArea .icon { font-size: 40px; }
+        #uploadArea p { margin-top: 10px; color: #94a3b8; }
+
+        /* 顶部 summary */
+        #summary { text-align: center; margin: 18px 0; color: #94a3b8; min-height: 20px; }
+
+        /* 任务卡片 */
+        .task-item {
+            background: rgba(30, 41, 59, .85); border: 1px solid #334155;
+            border-radius: 12px; padding: 18px 20px; margin-bottom: 18px;
+        }
+        .task-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .file-name { font-weight: bold; word-break: break-all; }
+        .status-badge {
+            font-size: 12px; padding: 3px 10px; border-radius: 20px;
+            background: #334155; color: #cbd5e1; white-space: nowrap; margin-left: 12px;
+        }
+        .status-badge.processing { background: rgba(56, 189, 248, .15); color: #38bdf8; }
+        .status-badge.completed { background: rgba(34, 197, 94, .15); color: #4ade80; }
+        .status-badge.failed { background: rgba(239, 68, 68, .15); color: #f87171; }
+
+        /* 进度条 */
+        .progress-wrapper {
+            height: 8px; background: #1e293b; border-radius: 6px; overflow: hidden; margin-bottom: 14px;
+        }
+        .progress-bar {
+            height: 100%; width: 0; border-radius: 6px;
+            background: linear-gradient(90deg, #38bdf8, #4ade80);
+            transition: width .5s ease;
+        }
+
+        /* 时间线日志 */
+        .log-timeline { list-style: none; padding-left: 6px; }
+        .log-item {
+            position: relative; padding: 6px 0 6px 26px; display: flex; align-items: center;
+        }
+        /* 竖线 */
+        .log-item::before {
+            content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 2px; background: #334155;
+        }
+        .log-item:first-child::before { top: 50%; }
+        .log-item:last-child::before { bottom: 50%; }
+        /* 圆点 */
+        .log-item::after {
+            content: ""; position: absolute; left: 1px; top: 50%; transform: translateY(-50%);
+            width: 12px; height: 12px; border-radius: 50%; background: #475569;
+        }
+        .log-item.done::after { background: #4ade80; box-shadow: 0 0 8px rgba(74, 222, 128, .8); }
+        .log-item.running::after { background: #38bdf8; animation: breath 1.2s ease-in-out infinite; }
+        @keyframes breath {
+            0%, 100% { box-shadow: 0 0 3px rgba(56, 189, 248, .5); }
+            50% { box-shadow: 0 0 12px rgba(56, 189, 248, 1); }
+        }
+        .log-item.running .log-name { color: #38bdf8; }
+        .log-item.done .log-name { color: #cbd5e1; }
+        .log-duration { margin-left: auto; font-size: 12px; color: #64748b; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>📚 知识库文件导入</h1>
+    <div id="uploadArea">
+        <div class="icon">⬆️</div>
+        <p>拖拽 PDF / Markdown 文件到此处，或点击选择</p>
+        <input type="file" id="fileInput" accept=".pdf,.md" multiple hidden>
+    </div>
+    <div id="summary"></div>
+    <div id="taskList"></div>
+</div>
+
+<script>
+const API_BASE = '';  // 同源，无需前缀
+
+const uploadArea = document.getElementById('uploadArea');
+const fileInput = document.getElementById('fileInput');
+const taskList = document.getElementById('taskList');
+const summaryEl = document.getElementById('summary');
+
+// 点击上传区触发文件选择
+uploadArea.addEventListener('click', () => fileInput.click());
+
+// 文件选择后上传
+fileInput.addEventListener('change', () => {
+    [...fileInput.files].forEach(uploadFile);
+    fileInput.value = '';  // 清空，允许重复选择同一文件
+});
+
+// 拖拽支持
+uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadArea.classList.remove('dragover');
+    [...e.dataTransfer.files].forEach(uploadFile);
+});
+
+// 上传文件
+async function uploadFile(file) {
+    // 1. 根据文件类型判断总步数（PDF 比 MD 多一步 pdf_to_md）
+    const isPDF = file.name.toLowerCase().endsWith('.pdf');
+    const totalNodes = isPDF ? 8 : 7;
+
+    // 2. 创建任务卡片
+    const itemEl = createTaskItem(file.name);
+    const progressWrapper = itemEl.querySelector('.progress-wrapper');
+    const statusBadge = itemEl.querySelector('.status-badge');
+    statusBadge.textContent = '上传中';
+
+    // 3. 发起上传请求
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const response = await fetch(`${API_BASE}/upload`, { method: 'POST', body: formData });
+        const result = await response.json();
+        if (!result.task_id) {
+            statusBadge.textContent = '上传失败';
+            statusBadge.className = 'status-badge failed';
+            return;
+        }
+        statusBadge.textContent = '处理中';
+        statusBadge.className = 'status-badge processing';
+
+        // 4. 开始轮询任务状态
+        pollStatus(result.task_id, itemEl, totalNodes);
+    } catch (e) {
+        statusBadge.textContent = '上传失败';
+        statusBadge.className = 'status-badge failed';
+    }
+}
+
+// 创建任务卡片 DOM
+function createTaskItem(fileName) {
+    const itemEl = document.createElement('div');
+    itemEl.className = 'task-item';
+    itemEl.innerHTML = `
+        <div class="task-header">
+            <span class="file-name">${fileName}</span>
+            <span class="status-badge">等待中</span>
+        </div>
+        <div class="progress-wrapper"><div class="progress-bar"></div></div>
+        <ul class="log-timeline"></ul>
+    `;
+    taskList.prepend(itemEl);
+    return itemEl;
+}
+
+// 轮询任务状态
+function pollStatus(taskId, itemEl, totalNodes) {
+    const progressWrapper = itemEl.querySelector('.progress-wrapper');
+    const statusBadge = itemEl.querySelector('.status-badge');
+
+    // 每 1.5 秒轮询一次
+    const interval = setInterval(async () => {
+        const res = await fetch(`${API_BASE}/status/${taskId}`);
+        const data = await res.json();
+
+        // 渲染时间线并计算进度
+        const percentage = renderLogsAndCalculateProgress(
+            itemEl, data.done_list, data.running_list, totalNodes, data.durations
+        );
+
+        if (data.status === 'completed') {
+            // 任务完成
+            updateProgressUI(progressWrapper, 100);
+            statusBadge.textContent = '已完成';
+            statusBadge.className = 'status-badge completed';
+            showSummary(data.durations);
+            clearInterval(interval);
+        } else if (data.status === 'failed') {
+            // 任务失败
+            statusBadge.textContent = '失败';
+            statusBadge.className = 'status-badge failed';
+            clearInterval(interval);
+        } else if (data.status === 'processing') {
+            // 还在处理，更新进度
+            updateProgressUI(progressWrapper, percentage);
+        }
+    }, 1500);
+}
+
+// 渲染时间线日志并计算进度百分比
+function renderLogsAndCalculateProgress(itemEl, doneList, runningList, totalNodes, durationMap) {
+    const timeline = itemEl.querySelector('.log-timeline');
+    durationMap = durationMap || {};
+
+    // 1. 移除旧的"运行中"节点（每轮状态可能变）
+    timeline.querySelectorAll('.log-item.running').forEach(li => li.remove());
+
+    // 2. 添加已完成节点（跳过已渲染的）
+    doneList.forEach(item => {
+        const exists = [...timeline.children].some(li => li.dataset.name === item);
+        if (exists) return;
+        const li = document.createElement('li');
+        li.className = 'log-item done';
+        li.dataset.name = item;
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'log-name';
+        nameSpan.textContent = item;
+        li.appendChild(nameSpan);
+
+        // 追加耗时标签
+        if (durationMap[item] !== undefined) {
+            const durationSpan = document.createElement('span');
+            durationSpan.className = 'log-duration';
+            durationSpan.textContent = formatDuration(durationMap[item]);
+            li.appendChild(durationSpan);
+        }
+        timeline.appendChild(li);
+    });
+
+    // 3. 添加运行中节点
+    runningList.forEach(item => {
+        const li = document.createElement('li');
+        li.className = 'log-item running';
+        li.dataset.name = item;
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'log-name';
+        nameSpan.textContent = item;
+        li.appendChild(nameSpan);
+        timeline.appendChild(li);
+    });
+
+    // 4. 计算进度百分比
+    return Math.min(100, Math.round((doneList.length / totalNodes) * 100));
+}
+
+// 更新进度条 UI
+function updateProgressUI(progressWrapper, percentage) {
+    const bar = progressWrapper.querySelector('.progress-bar');
+    bar.style.width = percentage + '%';
+}
+
+// 格式化耗时（秒 → 可读字符串）
+function formatDuration(seconds) {
+    if (seconds < 60) {
+        return seconds.toFixed(1) + 's';
+    }
+    const mins = Math.floor(seconds / 60);
+    const secs = (seconds % 60).toFixed(0);
+    return `${mins}m${secs}s`;
+}
+
+// 显示总耗时 summary
+function showSummary(durations) {
+    const total = Object.values(durations || {}).reduce((acc, d) => acc + d, 0);
+    summaryEl.textContent = `✅ 最近一次任务完成，节点总耗时：${formatDuration(total)}`;
+}
+</script>
+</body>
+</html>

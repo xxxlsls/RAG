@@ -3,6 +3,7 @@
   @Time:2026/8/20
   @Desc:
 """
+import json
 # knowledge/utils/client/storage_clients.py
 
 import threading
@@ -107,3 +108,25 @@ class StorageClients(BaseClientManager):
         except Exception as e:
             logger.error(f"MinIO 客户端创建失败: {e}")
             raise ConnectionError(f"MinIO 连接失败: {e}") from e
+    @staticmethod
+    def _ensure_public_read(client: Minio, bucket_name: str) -> None:
+        """设置桶的匿名只读策略。
+
+        前端 <img src> 是不带凭证的匿名请求，而 MinIO 桶默认 private，
+        会返回 403 AccessDenied，表现为图片裂开。
+        只放开 s3:GetObject，不放开 s3:ListBucket，避免对象列表被枚举。
+        """
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"AWS": ["*"]},
+                "Action": ["s3:GetObject"],
+                "Resource": [f"arn:aws:s3:::{bucket_name}/*"],
+            }],
+        }
+        try:
+            client.set_bucket_policy(bucket_name, json.dumps(policy))
+            logger.info(f"MinIO bucket '{bucket_name}' 匿名只读策略已生效")
+        except Exception as e:
+            logger.warning(f"设置匿名只读策略失败，前端图片可能返回 403: {e}")

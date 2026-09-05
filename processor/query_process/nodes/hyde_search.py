@@ -7,8 +7,6 @@
 import json
 import logging
 
-from sympy.solvers.inequalities import reduce_rational_inequalities
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -16,7 +14,7 @@ from typing import Dict, Any, List, Tuple, Union
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from processor.import_process.base import BaseNode
+from processor.query_process.base import BaseNode
 from processor.query_process.config import get_config
 from processor.query_process.exceptions import StateFieldError
 from processor.query_process.prompt import USER_HYDE_PROMPT_TEMPLATE
@@ -36,7 +34,6 @@ class HyDeSearchNode(BaseNode):
     name: str = "search_embedding_hyde"
 
     def __init__(self):
-        # 注意：必须传入查询流程的 config，否则 BaseNode 默认用导入流程的 config
         super().__init__(config=get_config())
 
     def process(self, state: QueryGraphState) -> Union[QueryGraphState, Dict[str, Any]]:

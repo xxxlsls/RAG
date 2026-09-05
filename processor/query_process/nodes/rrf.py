@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 from typing import Dict, Any, List, Tuple
 
-from processor.import_process.base import BaseNode
+from processor.query_process.base import BaseNode
 from processor.query_process.config import get_config
 from processor.query_process.state import QueryGraphState
 

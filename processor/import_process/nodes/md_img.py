@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Dict, Deque, Set
+from urllib.parse import quote
 
 from processor.import_process.base import BaseNode, setup_logging
 from processor.import_process.exceptions import StateFieldError, FileProcessingError
@@ -248,7 +249,13 @@ class ImageUploader:
             # 个体级降级：单张上传失败保留本地路径，不影响其他
             try:
                 minio_client.fput_object(minio_bucket, object_name, img.path)
-                remote_urls[img.name] = f"{minio_base_url}/{minio_bucket}/{object_name}"
+                # object_name 由文档标题拼成，常带空格和括号（如 "华为擎云 L540 用户指南-(KLVV,UOS_01,zh-cn)"）。
+                # CommonMark 的链接地址不允许出现未转义空白，前端 marked 会直接放弃解析、
+                # 把 ![alt](url) 当正文原样输出，图片就丢了。这里按段做百分号编码：
+                # 空格→%20、括号→%28/%29、中文→UTF-8 转义，MinIO 收到请求会自动解码回原 key。
+                # safe='/' 保留对象名里的路径分隔符。
+                encoded_object_name = quote(object_name, safe="/")
+                remote_urls[img.name] = f"{minio_base_url}/{minio_bucket}/{encoded_object_name}"
                 self.logger.info(f"{img.name} 上传成功")
             except Exception:
                 self.logger.warning(f"{img.name} 上传失败，保留本地路径")

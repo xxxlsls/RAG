@@ -74,7 +74,7 @@ from processor.query_process.nodes.item_name_confirm import ItemNameConfirmNode
 from processor.query_process.nodes.rerank import RerankNode
 from processor.query_process.nodes.rrf import RrfNode
 from processor.query_process.nodes.vector_search import VectorSearchNode
-from processor.query_process.nodes.web_search_mcp import McpSearchNode
+from processor.query_process.nodes.web_search_mcp import WebMcpSearchNode
 from processor.query_process.state import QueryGraphState
 
 
@@ -112,7 +112,7 @@ def create_query_graph() -> CompiledStateGraph:
         "multi_search": lambda x: x,
         "search_embedding": VectorSearchNode(),
         "search_embedding_hyde": HyDeSearchNode(),
-        "web_search_mcp":McpSearchNode(),
+        "web_search_mcp": WebMcpSearchNode(),
         "join":lambda x: {},
         "rrf":RrfNode(),
         "rerank": RerankNode(),
@@ -159,5 +159,7 @@ def create_query_graph() -> CompiledStateGraph:
 # 创建全局图实例
 query_app = create_query_graph()
 
-#打印图
-query_app.get_graph().print_ascii()
+
+if __name__ == "__main__":
+    # 只在直接运行本文件时打印图结构，避免服务启动时刷屏
+    query_app.get_graph().print_ascii()

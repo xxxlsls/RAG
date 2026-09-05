@@ -5,6 +5,8 @@ import queue
 from typing import Dict, Any, Optional, AsyncGenerator
 from fastapi import Request
 
+logger = logging.getLogger(__name__)
+
 
 class SSEEvent:
     PROGRESS = "progress"  # 任务节点进度
@@ -78,7 +80,10 @@ async def sse_generator(task_id: str, request: Request) -> AsyncGenerator:
     if sse_queue is None:
         return
 
-    loop = asyncio.get_event_loop()
+    # 在协程内部必须用 get_running_loop()：
+    # get_event_loop() 在 Python 3.10+ 已弃用，3.12+ 会抛 DeprecationWarning，
+    # 且与 query_router.py 中的用法保持一致
+    loop = asyncio.get_running_loop()
 
     # 3. 让当前线程一直从队列中获取数据【如果队列一旦有数据，就直接获取，如果队列没有数据，等一会，在问一下】
     try:
@@ -97,9 +102,10 @@ async def sse_generator(task_id: str, request: Request) -> AsyncGenerator:
                 # 3.5 打包返回
                 yield _sse_pack(event_type, event_data)  # 打包并且通过yield返回
             except queue.Empty:
-                logging.info(f"队列为空...请稍等")
+                # 降为 debug：流式期间每秒会进一次，info 级别会刷屏
+                logger.debug("队列为空...请稍等")
                 continue
-    except  (ConnectionResetError, BrokenPipeError) as e:
+    except (ConnectionResetError, BrokenPipeError):
         # 客户端中断 关闭了窗口或者浏览器
         return
 

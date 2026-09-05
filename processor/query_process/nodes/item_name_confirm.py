@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Tuple
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from processor.import_process.base import BaseNode
+from processor.query_process.base import BaseNode
 from processor.query_process.config import get_config
 from processor.query_process.prompt import ITEM_NAME_EXTRACT_TEMPLATE
 from processor.query_process.state import QueryGraphState
@@ -68,11 +68,13 @@ class ItemNameExtractor:
             return result
 
         # ⑥ 清洗解析
+        # 注意：_clean_parse 内部抛的是 ValueError，而 JSONDecodeError 只是它的子类，
+        # 单写 except JSONDecodeError 抓不到，必须一起兜住
         try:
             parsed_result = self._clean_parse(llm_response.content)
-            result["rewritten_query"] = parsed_result.get("rewritten_query", original_query)
-            result["item_names"] = parsed_result.get("item_names")
-        except JSONDecodeError as e:
+            result["rewritten_query"] = parsed_result.get("rewritten_query") or original_query
+            result["item_names"] = parsed_result.get("item_names") or []
+        except (JSONDecodeError, ValueError) as e:
             logger.error(f"清洗以及解析LLM的输出失败：{str(e)}")
 
         # ⑦ 返回 result
@@ -218,7 +220,7 @@ class ItemNameConfirmNode(BaseNode):
     name = "item_name_confirm"
 
     def __init__(self):
-        super().__init__()
+        super().__init__(config=get_config())
         self._item_name_extractor = ItemNameExtractor()
         self._item_name_aligner = ItemNameAligner()
 

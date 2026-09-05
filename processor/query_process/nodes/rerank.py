@@ -6,15 +6,12 @@
 
 import logging
 
-from django.template.defaultfilters import upper
-from modelscope.preprocessors.templates.utils import upper_bound
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from typing import Dict, Any, List
 
-from processor.import_process.base import BaseNode
+from processor.query_process.base import BaseNode
 from processor.query_process.config import get_config
 from processor.query_process.state import QueryGraphState
 from utils.client.ai_clients import AIClients
@@ -158,15 +155,17 @@ class RerankNode(BaseNode):
         for i in range(0, upper_bound - 1):
             current_score = reranked_docs[i].get("score")
             next_score = reranked_docs[i + 1].get("score")
+            # 必须先判空再相减：Reranker 降级时 score 会全置为 None，
+            # 顺序写反就是 None - None → TypeError，降级兜底直接被这里打死
+            if current_score is None or next_score is None: continue
             gap = current_score - next_score
-            if next_score is None or current_score is None: continue
             if gap >= self.config.rerank_gap_abs and gap > max_gap:
                 max_gap = gap
                 cut_off = i + 1
                 logger.info(f"位置{cut_off}发生断崖，gap={max_gap:.4f}")
 
         # ⑤ 兜底：至少保留 lower_bound 个
-        # cut_off  = max(cut_off, lower_bound)
+        cut_off = max(cut_off, lower_bound)
         return reranked_docs[:cut_off]
 
 

@@ -5,15 +5,12 @@
 
 import logging
 
-from numpy.distutils.conv_template import header
-from sympy.abc import delta
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from typing import List, Dict, Any, Tuple
 
-from processor.import_process.base import BaseNode
+from processor.query_process.base import BaseNode
 from processor.query_process.config import get_config
 from processor.query_process.prompt import ANSWER_PROMPT
 from processor.query_process.state import QueryGraphState
@@ -120,32 +117,37 @@ class AnswerOutputNode(BaseNode):
         used_chars = 0
 
         # ② 遍历文档
-        # reranked_docs 数据结构 = [{'content': '主板短路通常表现为通电后风扇转一下就停，可以使用万用表的蜂鸣档测量。', 'title': '主板维修手册', 'chunk_id': 'local_1', 'url': '', 'source': 'local', 'score': 0.993734466224161}, {'content': '主板通电前先打各主供电电感的对地阻值，阻值偏低就是短路。', 'title': '短路查修指南', 'chunk_id': None, 'url': 'https://example.com/repair', 'source': 'web', 'score': 0.9813106915732508}]
+        # reranked_docs 数据结构 = [{'content': '主板短路通常表现为...', 'title': '主板维修手册', 'chunk_id': 'local_1', 'url': '', 'source': 'local', 'score': 0.9937}, {'content': '主板通电前先打各主供电电感的对地阻值。', 'title': '短路查修指南', 'chunk_id': None, 'url': 'https://example.com/repair', 'source': 'web', 'score': 0.9813}]
         for idx,doc in enumerate(reranked_docs,1):
             content = doc.get("content", "").strip()
             if not content: continue
 
-            # 格式化文档
+            # 格式化文档：先收齐元信息标签，出了内层循环再拼 doc_entry
             meta_tags = [f"[{idx}]"]
             for field, template in [("source", "[source={}]"),
                                     ("chunk_id", "[chunk_id={}]"),
                                     ("url", "[url={}]"),
                                     ("title", "[title={}]"),
                                     ("score", "[score={}]")]:
-                field_value = str(doc.get(field, "")).strip()
-                if field_value:
-                    meta_tags.append(template.format(field_value))
-                    doc_entry = " ".join(meta_tags) + "\n" + content
+                raw_value = doc.get(field)
+                # 网络文档的 chunk_id、Reranker 降级时的 score 都是 None，
+                # str(None) 会得到字符串 "None" 并被当成有效值拼进提示词
+                if raw_value is None: continue
+                field_value = str(raw_value).strip()
+                if not field_value: continue
+                meta_tags.append(template.format(field_value))
 
+            doc_entry = " ".join(meta_tags) + "\n" + content
+
+            # 预算判断：统一用累计已用量对比初始预算，不能再反过来扣 char_budget
             if used_chars + len(doc_entry) > char_budget:
                 break
             formatted_lines.append(doc_entry)
 
             used_chars += len(doc_entry) + 1
-            char_budget -= used_chars
 
         # ③ 返回格式化文本和剩余预算
-        return "\n\n".join(formatted_lines), char_budget
+        return "\n\n".join(formatted_lines), char_budget - used_chars
 
     def _format_chat_history(self, chat_history: List[Dict], char_budget: int) -> Tuple[str, int]:
         """格式化历史对话
@@ -165,13 +167,15 @@ class AnswerOutputNode(BaseNode):
             text = message.get("text", "")
             if not text or role not in role_label_map: continue
 
-            role = role_label_map.get(role, "")
-            formatted_lines.append(f"{role}: {text}")
-            used_chars += len(formatted_lines[-1]) + 1
-            char_budget -= used_chars
+            history_line = f"{role_label_map[role]}: {text}"
+            # 文档用剩的预算才是历史对话的上限，超了就截断
+            if used_chars + len(history_line) > char_budget:
+                break
+            formatted_lines.append(history_line)
+            used_chars += len(history_line) + 1
 
         # ③ 返回格式化文本和剩余预算
-        return "\n".join(formatted_lines), char_budget
+        return "\n".join(formatted_lines), char_budget - used_chars
 
     # ================================================================== #
     #                    LLM 生成                                         #

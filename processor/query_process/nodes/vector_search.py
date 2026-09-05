@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 from typing import Dict, Any, List, Tuple, Union
 
-from processor.import_process.base import BaseNode
+from processor.query_process.base import BaseNode
 from processor.query_process.config import get_config
 from processor.query_process.exceptions import StateFieldError
 from processor.query_process.state import QueryGraphState
@@ -27,7 +27,6 @@ class VectorSearchNode(BaseNode):
     name = "search_embedding"
 
     def __init__(self):
-        # 注意：必须传入查询流程的 config，否则 BaseNode 默认用导入流程的 config
         super().__init__(config=get_config())
 
     def process(self, state: QueryGraphState) -> Union[QueryGraphState, Dict[str, Any]]:

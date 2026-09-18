@@ -15,6 +15,7 @@ from processor.query_process.base import BaseNode
 from processor.query_process.config import get_config
 from processor.query_process.state import QueryGraphState
 from utils.client.ai_clients import AIClients
+from utils.markdown_util import strip_image_syntax
 
 
 class RerankNode(BaseNode):
@@ -104,7 +105,13 @@ class RerankNode(BaseNode):
             return []
 
         # ③ 构建 (query, doc_content) 对
-        query_doc_pairs = [(user_query, doc.get('content')) for doc in merged_multi_docs]
+        # 交叉编码器输入先剥离图片语法：MinIO URL 的百分号转义串会挤占模型
+        # max_length 并把相关性打分带偏。只清洗喂给模型的副本，
+        # doc['content'] 保持完整 —— 下游 answer_output 要靠它把图片写进答案。
+        query_doc_pairs = [
+            (user_query, strip_image_syntax(doc.get('content') or ''))
+            for doc in merged_multi_docs
+        ]
         try:
             # ④ 计算相关性得分（normalize=True 直接归一化到 0~1）
             rerank_scores = rerank_model.compute_score(sentence_pairs=query_doc_pairs, normalize=True)

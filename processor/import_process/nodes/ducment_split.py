@@ -8,7 +8,11 @@ from processor.import_process.config import get_config
 from processor.import_process.exceptions import ValidationError
 
 from processor.import_process.state import ImportGraphState
-from utils.markdown_util import MarkdownTableLinearizer
+from utils.markdown_util import (
+    MarkdownTableLinearizer,
+    protect_image_syntax,
+    restore_image_syntax,
+)
 
 
 
@@ -173,12 +177,15 @@ class DocumentSplitNode(BaseNode):
 
         #  ③ total <= max_content_length → return [section]（不用切）
         if total <= max_content_length:
-            return [section]
+            # 不超长就不用切，但必须带上已线性化的 body：
+            # 上面已经付过 playwright 截图 + VLM 调用的成本，
+            # 原来直接 return [section] 会把结果扔掉，短章节的 <table> 原样入库。
+            return [self._with_body(section, body)]
 
         #  ④ body_length = max_content_length - len(title_prefix)；<=0 也 return [section]
         body_length = max_content_length - len(title_prefix)
         if body_length <= 0:
-            return [section]
+            return [self._with_body(section, body)]
 
         #  ⑤ RecursiveCharacterTextSplitter 切 body（separators 抄上面）
         text_splitter = RecursiveCharacterTextSplitter(
@@ -186,21 +193,40 @@ class DocumentSplitNode(BaseNode):
             chunk_overlap=0,
             separators=["\n\n", "\n", "。", "！", "？", "；", ".", "!", "?", ";", " ", ""],
         )
-        chunks = text_splitter.split_text(body)
+        # 切分前先摘出图片语法换成短占位符：separators 末尾的 " " 和 ""（字符级兜底）
+        # 会把三四百字符的 MinIO URL 拦腰砍断，导致 ![alt](url) 分成两半、图片永久丢失。
+        protected_body, image_store = protect_image_syntax(body)
+        chunks = text_splitter.split_text(protected_body)
         #  ⑥ 切出来 <=1 块 → return [section]
         if len(chunks) <= 1:
-            return [section]
+            return [self._with_body(section, body)]
         new_sections = []
         for i, chunk in enumerate(chunks):
         #  ⑦ 组装子片段：每块 {'title': f"{title}({i+1})", 'body': text,
             #        'file_title': section['file_title'], 'parent_title': section['pare
             new_sections.append({
                 'title': f"{title}({i+1})",
-                'body': chunk,
+                # 还原后单个 chunk 可能略超 max_content_length（图片语法本身比预算还长时）。
+                # 刻意取舍：宁可超长也不能把图片砍断。下游 Milvus content 上限 65535，无风险。
+                'body': restore_image_syntax(chunk, image_store),
                 'file_title': section['file_title'],
                 'parent_title': section['parent_title'],
             })
         return new_sections
+
+    @staticmethod
+    def _with_body(section, body):
+        """返回 body 被替换掉的 section 副本，其余字段原样保留。
+
+        刻意不就地改 section['body']：process() 里的 sections 列表还要传给
+        _log_summary 统计"原始节数"，就地修改会让统计口径和实际产出对不上。
+        body 没变化时直接返回原对象，避免无谓拷贝。
+        """
+        if section.get('body') == body:
+            return section
+        new_section = dict(section)
+        new_section['body'] = body
+        return new_section
 
     def merge_short_section(self, sections, max_content_length, min_content_length):
         """短章节合并：不足 min_content_length 的章节，和后面的章节合并（合并不超过 max）"""

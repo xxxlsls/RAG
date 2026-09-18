@@ -11,6 +11,7 @@ from processor.import_process.state import ImportGraphState
 from prompt.import_prompt import ITEM_NAME_USER_PROMPT_TEMPLATE, ITEM_NAME_SYSTEM_PROMPT
 from utils.client.ai_clients import AIClients
 from utils.client.storage_clients import StorageClients
+from utils.markdown_util import strip_image_syntax
 
 
 class ItemNameRecognitionNode(BaseNode):
@@ -48,7 +49,11 @@ class ItemNameRecognitionNode(BaseNode):
             # 判断chunk类型
             if not isinstance(chunk, dict):
                 continue
-            chunk_content = chunk.get("content")
+            # 剥离图片语法：一条 MinIO URL 动辄三四百字符，会迅速吃光
+            # item_name_chunk_size 预算，导致后面真正带商品名线索的切片被 break 掉。
+            # 同样兼作 None 防护：原来 chunk.get("content") 为 None 时，
+            # f-string 会拼出字面量 "None" 送进 LLM。
+            chunk_content = strip_image_syntax(chunk.get("content") or "")
             context = f'【切片】-{index}-{chunk_content}'
 
             # 先判断再加入，保证语义完整性

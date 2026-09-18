@@ -1,9 +1,84 @@
 import base64
 import os
 import re
-from typing import List
+from typing import List, Tuple
 from bs4 import BeautifulSoup
 
+
+
+# Markdown 图片语法：![alt](url) 或 ![alt](url "标题")
+# url 可能含空格、中文、百分号转义，甚至未编码的裸括号（历史入库数据），
+# 所以用「一层括号配对」而不是 [^)]* 来定位结尾，否则会在 -(KLVV 处提前截断。
+_IMAGE_SYNTAX_PATTERN = re.compile(
+    r'!\[([^\]\n]*)\]\([^()\n]*(?:\([^()\n]*\)[^()\n]*)*\)'
+)
+
+_IMAGE_PLACEHOLDER_PREFIX = '%%KBIMG'
+_IMAGE_PLACEHOLDER_PATTERN = re.compile(r'%%KBIMG(\d+)%%')
+
+
+def strip_image_syntax(text: str) -> str:
+    """把 Markdown 图片语法降级成纯 alt 文本，专供「喂给模型」前调用。
+
+    背景：md_img_node 会把图片替换成 ![VLM摘要](http://minio/bucket/文档名/图片名)，
+    其中 URL 含大量百分号转义（%E5%8D%8E%E4%B8%BA...）和 64 位哈希文件名，
+    长度常超过正文本身。这串字符对语义零贡献，却会：
+      - 稀释 BGE-M3 稠密向量，把 chunk 往「无意义字符」方向拉偏，降低召回
+      - 往稀疏向量塞入 %E5%8D%8E 之类垃圾 token，干扰关键词匹配
+      - 挤占 Reranker 的 max_length 和 LLM 提示词的字符预算
+    而 alt 部分是 VLM 生成的图片摘要，是真正的语义信息，必须保留。
+
+    重要：只在「送进模型」前调用。写入 Milvus 的 content 和拼进答案提示词的
+    content 必须保留完整图片语法，否则图片传不到前端。
+
+    已知边界：只处理一层括号嵌套，形如 ![a](u((x))) 的双层嵌套不匹配（实际不会出现）。
+    """
+    if not text:
+        return text
+    return _IMAGE_SYNTAX_PATTERN.sub(lambda m: m.group(1).strip(), text)
+
+
+def protect_image_syntax(text: str) -> Tuple[str, List[str]]:
+    """把 Markdown 图片语法换成短占位符，返回 (占位后的文本, 图片原文列表)。
+
+    为什么需要：RecursiveCharacterTextSplitter 的 separators 末尾是 " " 和 ""
+    （字符级兜底），而 MinIO 图片 URL 动辄三四百字符、还可能含未编码的空格与括号。
+    切分点一旦落在 URL 内部就会把 ![alt](url) 拦腰砍断：
+        chunk A 结尾 -> "![摘要](http://192.168.10."
+        chunk B 开头 -> "170:9000/knowledge-base-files/%E5%8D%8E...jpg)"
+    两半都是废数据，图片永久丢失（前端找不到配对括号会直接跳过）。
+
+    占位符刻意只用 % 字母 数字，不含 separators 里的任何分隔符
+    （. ! ? ; 空格 换行 中文句号），因此不会被二次切分。
+
+    还原请配套使用 restore_image_syntax。
+    """
+    if not text:
+        return text, []
+
+    store: List[str] = []
+
+    def _replacer(match: re.Match) -> str:
+        store.append(match.group(0))
+        return f"{_IMAGE_PLACEHOLDER_PREFIX}{len(store) - 1}%%"
+
+    return _IMAGE_SYNTAX_PATTERN.sub(_replacer, text), store
+
+
+def restore_image_syntax(text: str, store: List[str]) -> str:
+    """把占位符还原成图片语法原文，store 由 protect_image_syntax 返回。
+
+    下标越界（理论上不会发生）时保留占位符原样，
+    这样异常能从 chunks.json 备份文件里直接看出来，而不是静默变成空串。
+    """
+    if not text or not store:
+        return text
+
+    def _replacer(match: re.Match) -> str:
+        index = int(match.group(1))
+        return store[index] if 0 <= index < len(store) else match.group(0)
+
+    return _IMAGE_PLACEHOLDER_PATTERN.sub(_replacer, text)
 
 
 class MarkdownTableLinearizer:

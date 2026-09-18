@@ -6,6 +6,7 @@ from processor.import_process.config import get_config
 from processor.import_process.exceptions import ValidationError
 from processor.import_process.state import ImportGraphState
 from utils.client.ai_clients import AIClients
+from utils.markdown_util import strip_image_syntax
 
 
 class BgeEmbeddingChunksNode(BaseNode):
@@ -51,7 +52,11 @@ class BgeEmbeddingChunksNode(BaseNode):
         embedding_contents = []
         for chunk in batch:
             item_name = chunk.get('item_name', '')
-            content = chunk.get('content', '')
+            # 剥离图片语法：MinIO URL 的百分号转义串和哈希文件名是纯噪声，
+            # 会稀释稠密向量、往稀疏向量塞垃圾 token；alt（VLM 摘要）才是语义信息。
+            # 只清洗送进模型的临时副本，chunk['content'] 原样不动 ——
+            # 它要带着完整图片语法写进 Milvus，最终靠它把图片传到前端。
+            content = strip_image_syntax(chunk.get('content', ''))
             embedding_contents.append(f"{item_name}\n{content}")
 
         # 2. 调 BGE-M3 批量嵌入（try 包住，失败 return batch 不炸）
